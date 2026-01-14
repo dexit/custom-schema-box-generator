@@ -161,6 +161,58 @@
         });
 
         /**
+         * Apply Template Automatically via AJAX
+         */
+        $(document).on('click', '.csg-apply-template-dynamic', function(e) {
+            e.preventDefault();
+            var btn = $(this);
+            var card = btn.closest('.csg-template-card');
+            var templateId = btn.data('template-id');
+            var postTypeSelect = card.find('.csg-apply-post-type-select');
+            var postType = postTypeSelect.val();
+
+            if (!postType) {
+                alert('Please select a post type first.');
+                return;
+            }
+
+            if (!confirm('This will set ' + postType + ' to Dynamic Mode and overwrite any existing dynamic schema for it. Continue?')) {
+                return;
+            }
+
+            btn.prop('disabled', true).text('Applying...');
+
+            $.ajax({
+                url: csg_ajax.ajax_url,
+                type: 'POST',
+                data: {
+                    action: 'csg_apply_template',
+                    nonce: csg_ajax.nonce,
+                    template_id: templateId,
+                    post_type: postType
+                },
+                success: function(response) {
+                    if (response.success) {
+                        btn.text('✓ Applied!').addClass('button-primary');
+                        console.log('Template applied successfully');
+                    } else {
+                        btn.text('Error').removeClass('button-primary');
+                        alert('Error: ' + response.data);
+                    }
+                },
+                error: function() {
+                    btn.text('Error');
+                    alert('AJAX error occurred.');
+                },
+                complete: function() {
+                    setTimeout(function() {
+                        btn.prop('disabled', false).text('Apply Automatically');
+                    }, 3000);
+                }
+            });
+        });
+
+        /**
          * FAQ accordion functionality
          */
         $('.csg-faq-question').on('click', function() {

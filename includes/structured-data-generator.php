@@ -16,66 +16,82 @@ class StructuredDataGenerator {
      * @return array|null Associative array representing JSON-LD, or null if unsupported.
      */
     public static function generate( $type ) {
+        $type = strtolower( $type );
         switch ( $type ) {
-            case 'Article':
+            case 'article':
                 return self::article();
-            case 'Book':
+            case 'book':
                 return self::book();
-            case 'Breadcrumb':
+            case 'breadcrumb':
                 return self::breadcrumb();
-            case 'Carousel':
+            case 'carousel':
                 return self::carousel();
-            case 'Course':
+            case 'course':
                 return self::course();
-            case 'Dataset':
+            case 'dataset':
                 return self::dataset();
-            case 'DiscussionForumPosting':
+            case 'discussionforumposting':
                 return self::discussion_forum();
-            case 'EducationEvent':
+            case 'quiz': // Aligned with features array
                 return self::education_qa();
-            case 'EmployerAggregateRating':
+            case 'employeraggregaterating':
                 return self::employer_aggregate_rating();
-            case 'FactCheck':
+            case 'factcheck':
                 return self::fact_check();
-            case 'Event':
+            case 'event':
                 return self::event();
-            case 'FAQPage':
+            case 'faqpage':
                 return self::faq();
-            case 'ImageObject':
+            case 'imageobject':
                 return self::image_metadata();
-            case 'JobPosting':
+            case 'jobposting':
                 return self::job_posting();
-            case 'LocalBusiness':
+            case 'localbusiness':
                 return self::local_business();
-            case 'MathSolver':
+            case 'mathsolver':
                 return self::math_solver();
-            case 'Movie':
+            case 'movie':
                 return self::movie();
-            case 'Organization':
+            case 'organization':
                 return self::organization();
-            case 'Product':
+            case 'product':
                 return self::product();
-            case 'ProfilePage':
+            case 'profilepage':
                 return self::profile_page();
-            case 'QAPage':
+            case 'qapage':
                 return self::qa_page();
-            case 'Recipe':
+            case 'recipe':
                 return self::recipe();
-            case 'Review':
+            case 'review':
                 return self::review();
-            case 'SoftwareApplication':
+            case 'softwareapplication':
                 return self::software_app();
-            case 'SpeakableSpecification':
+            case 'speakablespecification':
                 return self::speakable();
-            case 'Subscription':
+            case 'subscription':
                 return self::subscription();
-            case 'VacationRental':
+            case 'vacationrental':
                 return self::vacation_rental();
-            case 'VideoObject':
+            case 'videoobject':
                 return self::video();
+            case 'medicalcondition':
+                return self::medical_condition();
             default:
                 return null;
         }
+    }
+
+    private static function medical_condition() {
+        return apply_filters( 'csg_sd_medical_condition', array(
+            '@context'          => 'https://schema.org',
+            '@type'             => 'MedicalCondition',
+            'name'              => get_the_title(),
+            'description'       => get_the_excerpt(),
+            'possibleTreatment' => array(
+                '@type' => 'MedicalTherapy',
+                'name'  => 'See a Doctor',
+            ),
+        ) );
     }
 
     private static function article() {

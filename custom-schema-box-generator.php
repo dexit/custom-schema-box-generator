@@ -37,7 +37,6 @@ function csg_enqueue_admin_assets( $hook ) {
         '2.2.0'
     );
 
-    // Enqueue JavaScript
     wp_enqueue_script(
         'csg-admin-scripts',
         plugin_dir_url( __FILE__ ) . 'assets/js/admin-scripts.js',
@@ -45,6 +44,12 @@ function csg_enqueue_admin_assets( $hook ) {
         '2.2.0',
         true
     );
+
+    // Localize for AJAX
+    wp_localize_script( 'csg-admin-scripts', 'csg_ajax', array(
+        'ajax_url' => admin_url( 'admin-ajax.php' ),
+        'nonce'    => wp_create_nonce( 'csg_ajax_nonce' )
+    ) );
 }
 add_action( 'admin_enqueue_scripts', 'csg_enqueue_admin_assets' );
 
@@ -131,7 +136,7 @@ function csg_register_settings() {
         'csg_enabled_sd_features',
         array(
             'type' => 'array',
-            'sanitize_callback' => 'csg_sanitize_post_types', // Reuse sanitize_post_types for keys => 1/0
+            'sanitize_callback' => 'csg_sanitize_features',
             'default' => array(),
         )
     );
@@ -139,11 +144,49 @@ function csg_register_settings() {
 add_action( 'admin_init', 'csg_register_settings' );
 
 /**
- * Sanitize the post types array.
- *
- * @param array $input The input array.
- * @return array The sanitized array.
+ * AJAX handler for applying a template to a post type.
  */
+function csg_ajax_apply_template() {
+    check_ajax_referer( 'csg_ajax_nonce', 'nonce' );
+
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( 'Unauthorized' );
+    }
+
+    $template_id = isset( $_POST['template_id'] ) ? sanitize_key( $_POST['template_id'] ) : '';
+    $post_type = isset( $_POST['post_type'] ) ? sanitize_key( $_POST['post_type'] ) : '';
+
+    if ( ! $template_id || ! $post_type ) {
+        wp_send_json_error( 'Missing data' );
+    }
+
+    $templates = csg_get_schema_templates();
+    if ( ! isset( $templates[ $template_id ] ) ) {
+        wp_send_json_error( 'Invalid template' );
+    }
+
+    $template_json = wp_json_encode( $templates[ $template_id ]['schema'], JSON_PRETTY_PRINT );
+
+    // Update Post Type Mode to Dynamic
+    $meta_box_types = get_option( 'csg_meta_box_type', array() );
+    $meta_box_types[ $post_type ] = 'dynamic';
+    update_option( 'csg_meta_box_type', $meta_box_types );
+
+    // Update Dynamic Schema
+    $dynamic_schemas = get_option( 'csg_dynamic_schema', array() );
+    $dynamic_schemas[ $post_type ] = $template_json;
+    update_option( 'csg_dynamic_schema', $dynamic_schemas );
+
+    // Ensure post type is enabled
+    $enabled_post_types = get_option( 'csg_enabled_post_types', array() );
+    $enabled_post_types[ $post_type ] = '1';
+    update_option( 'csg_enabled_post_types', $enabled_post_types );
+
+    wp_send_json_success( 'Template applied and Dynamic Mode enabled for ' . $post_type );
+}
+add_action( 'wp_ajax_csg_apply_template', 'csg_ajax_apply_template' );
+
+/**
 function csg_sanitize_post_types( $input ) {
     if ( ! is_array( $input ) ) {
         return array();
@@ -152,6 +195,26 @@ function csg_sanitize_post_types( $input ) {
     $sanitized = array();
     foreach ( $input as $post_type => $enabled ) {
         $sanitized[ sanitize_key( $post_type ) ] = ( $enabled === '1' ) ? '1' : '0';
+    }
+
+    return $sanitized;
+}
+
+/**
+ * Sanitize the structured data features array.
+ *
+ * @param array $input The input array.
+ * @return array The sanitized array.
+ */
+function csg_sanitize_features( $input ) {
+    if ( ! is_array( $input ) ) {
+        return array();
+    }
+
+    $sanitized = array();
+    foreach ( $input as $feature => $enabled ) {
+        // Use sanitize_text_field to preserve Case for the keys
+        $sanitized[ sanitize_text_field( $feature ) ] = ( $enabled === '1' ) ? '1' : '0';
     }
 
     return $sanitized;
@@ -885,25 +948,58 @@ function csg_render_features_tab() {
     $enabled_features = get_option( 'csg_enabled_sd_features', array() );
     ?>
     <div class="csg-features-container">
-        <h2>Structured Data Features</h2>
-        <p class="description">Select the structured data types you want to automatically generate for your content.</p>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <div>
+                <h2>Structured Data Features</h2>
+                <p class="description">Select the structured data types you want to automatically generate for your content.</p>
+            </div>
+            <div class="csg-features-ctrls">
+                <button type="button" class="button csg-features-select-all">Select All</button>
+                <button type="button" class="button csg-features-deselect-all">Deselect All</button>
+            </div>
+        </div>
         
         <form method="post" action="options.php">
             <?php
             settings_fields( 'csg_settings_group' );
             ?>
-            <div class="csg-features-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 15px; margin-top: 20px;">
+            <div class="csg-features-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 15px; margin-top: 10px;">
                 <?php foreach ( $features as $key => $label ) : ?>
                     <?php $is_enabled = isset( $enabled_features[ $key ] ) && $enabled_features[ $key ] === '1'; ?>
-                    <label class="csg-feature-item" style="display: block; padding: 15px; background: #fff; border: 1px solid #ccd0d4; border-radius: 4px;">
-                        <input type="checkbox" name="csg_enabled_sd_features[<?php echo esc_attr( $key ); ?>]" value="1" <?php checked( $is_enabled ); ?>>
-                        <strong><?php echo esc_html( $label ); ?></strong>
+                    <label class="csg-feature-item-card <?php echo $is_enabled ? 'is-enabled' : ''; ?>" style="display: flex; align-items: center; padding: 15px; background: #fff; border: 1px solid #ccd0d4; border-radius: 6px; cursor: pointer; transition: all 0.2s;">
+                        <input type="checkbox" name="csg_enabled_sd_features[<?php echo esc_attr( $key ); ?>]" value="1" <?php checked( $is_enabled ); ?> style="margin-right: 12px; transform: scale(1.2);">
+                        <div style="line-height: 1.2;">
+                            <strong style="display: block; font-size: 14px;"><?php echo esc_html( $label ); ?></strong>
+                            <span style="font-size: 11px; color: #777;">Type: <?php echo esc_html( $key ); ?></span>
+                        </div>
                     </label>
                 <?php endforeach; ?>
             </div>
-            <?php submit_button( __( 'Save Features', 'custom-schema-box-generator' ) ); ?>
+            <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd;">
+                <?php submit_button( __( 'Save Enabled Features', 'custom-schema-box-generator' ) ); ?>
+            </div>
         </form>
     </div>
+
+    <script>
+    jQuery(document).ready(function($) {
+        $('.csg-features-select-all').on('click', function() {
+            $('.csg-features-grid input[type="checkbox"]').prop('checked', true).trigger('change');
+        });
+        $('.csg-features-deselect-all').on('click', function() {
+            $('.csg-features-grid input[type="checkbox"]').prop('checked', false).trigger('change');
+        });
+        $('.csg-features-grid input[type="checkbox"]').on('change', function() {
+            if ($(this).is(':checked')) {
+                $(this).closest('.csg-feature-item-card').addClass('is-enabled').css('border-color', '#2271b1').css('background', '#f0f6fb');
+            } else {
+                $(this).closest('.csg-feature-item-card').removeClass('is-enabled').css('border-color', '#ccd0d4').css('background', '#fff');
+            }
+        });
+        // Initial state
+        $('.csg-features-grid input[type="checkbox"]:checked').closest('.csg-feature-item-card').css('border-color', '#2271b1').css('background', '#f0f6fb');
+    });
+    </script>
     <?php
 }
 
@@ -919,6 +1015,9 @@ function csg_render_templates_tab() {
         <div class="csg-templates-grid">
             <?php
             $templates = csg_get_schema_templates();
+            $enabled_post_types = get_option( 'csg_enabled_post_types', array() );
+            $post_types_objects = get_post_types( array( 'public' => true ), 'objects' );
+            
             foreach ( $templates as $template_id => $template ) :
             ?>
                 <div class="csg-template-card">
@@ -927,6 +1026,20 @@ function csg_render_templates_tab() {
                         <span class="csg-template-type"><?php echo esc_html( $template['type'] ); ?></span>
                     </div>
                     <p class="csg-template-description"><?php echo esc_html( $template['description'] ); ?></p>
+                    
+                    <div class="csg-template-apply-box" style="margin-bottom: 15px; padding: 10px; background: #f9f9f9; border-radius: 4px;">
+                        <label style="display: block; font-size: 11px; margin-bottom: 5px; color: #666;">Apply to Post Type (Dynamic Mode):</label>
+                        <select class="csg-apply-post-type-select" style="width: 100%; margin-bottom: 8px;">
+                            <option value="">-- Choose Post Type --</option>
+                            <?php foreach ( $post_types_objects as $pt ) : ?>
+                                <option value="<?php echo esc_attr( $pt->name ); ?>"><?php echo esc_html( $pt->labels->singular_name ); ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                        <button type="button" class="button button-small csg-apply-template-dynamic" data-template-id="<?php echo esc_attr( $template_id ); ?>">
+                            Apply Automatically
+                        </button>
+                    </div>
+
                     <div class="csg-template-actions">
                         <button type="button" class="button button-primary csg-copy-template" data-template-id="<?php echo esc_attr( $template_id ); ?>">
                             Copy Template
@@ -2079,9 +2192,101 @@ function csg_get_schema_templates() {
                     '@type' => 'MedicalTherapy',
                     'name' => 'Treatment Name',
                 ),
-                'riskFactor' => array(
-                    '@type' => 'MedicalRiskFactor',
-                    'name' => 'Risk Factor',
+            ),
+        ),
+        'profile' => array(
+            'name' => 'Profile Page (Person)',
+            'type' => 'ProfilePage',
+            'description' => 'For individual profile pages or biography sections.',
+            'schema' => array(
+                '@context' => 'https://schema.org',
+                '@type' => 'ProfilePage',
+                'mainEntity' => array(
+                    '@type' => 'Person',
+                    'name' => '{{author_name}}',
+                    'image' => '{{featured_image}}',
+                    'description' => 'Biography of {{author_name}}',
+                    'sameAs' => array(
+                        '{{author_url}}'
+                    )
+                )
+            )
+        ),
+        'dataset' => array(
+            'name' => 'Dataset',
+            'type' => 'Dataset',
+            'description' => 'For pages describing a specific collection of data.',
+            'schema' => array(
+                '@context' => 'https://schema.org',
+                '@type' => 'Dataset',
+                'name' => '{{post_title}}',
+                'description' => '{{post_excerpt}}',
+                'url' => '{{post_url}}',
+                'keywords' => '{{post_tags}}',
+                'license' => 'https://creativecommons.org/licenses/by/4.0/'
+            )
+        ),
+        'movie' => array(
+            'name' => 'Movie',
+            'type' => 'Movie',
+            'description' => 'For movie review or information pages.',
+            'schema' => array(
+                '@context' => 'https://schema.org',
+                '@type' => 'Movie',
+                'name' => '{{post_title}}',
+                'image' => '{{featured_image}}',
+                'director' => array(
+                    '@type' => 'Person',
+                    'name' => 'Director Name'
+                )
+            )
+        ),
+        'qa' => array(
+            'name' => 'Q&A Page',
+            'type' => 'QAPage',
+            'description' => 'For pages that contain a question and its answers.',
+            'schema' => array(
+                '@context' => 'https://schema.org',
+                '@type' => 'QAPage',
+                'mainEntity' => array(
+                    '@type' => 'Question',
+                    'name' => '{{post_title}}',
+                    'text' => 'Full text of the question',
+                    'answerCount' => 1,
+                    'acceptedAnswer' => array(
+                        '@type' => 'Answer',
+                        'text' => 'Top rated answer text'
+                    )
+                )
+            ),
+        ),
+        'about' => array(
+            'name' => 'About Page',
+            'type' => 'AboutPage',
+            'description' => 'For the "About Us" page of your website.',
+            'schema' => array(
+                '@context' => 'https://schema.org',
+                '@type' => 'AboutPage',
+                'mainEntity' => array(
+                    '@type' => 'Organization',
+                    'name' => '{{site_name}}',
+                    'url' => '{{site_url}}',
+                    'logo' => '{{site_logo}}',
+                ),
+            ),
+        ),
+        'contact' => array(
+            'name' => 'Contact Page',
+            'type' => 'ContactPage',
+            'description' => 'For the contact page with business information.',
+            'schema' => array(
+                '@context' => 'https://schema.org',
+                '@type' => 'ContactPage',
+                'mainEntity' => array(
+                    '@type' => 'Organization',
+                    'name' => '{{site_name}}',
+                    'telephone' => '+1-555-555-5555',
+                    'email' => 'info@example.com',
                 ),
             ),
         ),
@@ -2287,9 +2492,40 @@ function csg_meta_box_html( $post ) {
     
     // Add a nonce field for security
     wp_nonce_field( 'csg_save_meta_box_data', 'csg_meta_box_nonce' );
+
+    $templates = csg_get_schema_templates();
     ?>
+    <div class="csg-meta-box-ctrls" style="margin-bottom: 10px; display: flex; gap: 10px; align-items: center;">
+        <label for="csg_template_selector" style="font-weight: bold;">Quick Template:</label>
+        <select id="csg_template_selector">
+            <option value="">-- Choose a Template --</option>
+            <?php foreach ( $templates as $tid => $t ) : ?>
+                <option value="<?php echo esc_attr( $tid ); ?>"><?php echo esc_html( $t['name'] ); ?></option>
+            <?php endforeach; ?>
+        </select>
+        <button type="button" class="button csg-populate-template">Load Template</button>
+        <span class="description" style="margin-left:auto;">Placeholders supported: <code>{{post_title}}</code>, <code>{{post_excerpt}}</code>, etc.</span>
+    </div>
+
     <label for="csg_schema_field" style="font-weight: bold; margin-bottom: 5px; display: block;">Schema JSON-LD Script:</label>
-    <textarea name="csg_schema_field" id="csg_schema_field" rows="10" style="width:100%;"><?php echo esc_textarea( $value ); ?></textarea>
+    <textarea name="csg_schema_field" id="csg_schema_field" rows="10" style="width:100%; font-family: monospace;"><?php echo esc_textarea( $value ); ?></textarea>
+    
+    <script>
+    jQuery(document).ready(function($) {
+        var templates = <?php echo wp_json_encode( $templates ); ?>;
+        $('.csg-populate-template').on('click', function() {
+            var tid = $('#csg_template_selector').val();
+            if (tid && templates[tid]) {
+                if ($('#csg_schema_field').val() !== '' && !confirm('Overwrite existing schema?')) {
+                    return;
+                }
+                var schema = JSON.stringify(templates[tid].schema, null, 4);
+                $('#csg_schema_field').val(schema);
+            }
+        });
+    });
+    </script>
+
     <p class="description">
         Enter your valid JSON-LD structured data here. It will be wrapped in <code>&lt;script type="application/ld+json"&gt;</code> tags automatically.
     </p>
