@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Custom Schema Box Generator
  * Description:       Adds a meta box to all post types for inserting custom schema (JSON-LD) structured data into the page head.
- * Version:           2.3.0
+ * Version:           3.0.0
  * Author:            FARAZFRANK
  * Author URI:        https://wpfrank.com/
  * License:           GPL-2.0+
@@ -14,6 +14,9 @@
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
+
+// Include Structured Data Generator
+require_once plugin_dir_path( __FILE__ ) . 'includes/structured-data-generator.php';
 
 /**
  * Enqueue admin styles and scripts.
@@ -119,6 +122,16 @@ function csg_register_settings() {
         array(
             'type' => 'array',
             'sanitize_callback' => 'csg_sanitize_dynamic_schema',
+            'default' => array(),
+        )
+    );
+
+    register_setting(
+        'csg_settings_group',
+        'csg_enabled_sd_features',
+        array(
+            'type' => 'array',
+            'sanitize_callback' => 'csg_sanitize_post_types', // Reuse sanitize_post_types for keys => 1/0
             'default' => array(),
         )
     );
@@ -269,6 +282,9 @@ function csg_render_settings_page() {
             <a href="?page=csgbxgen-settings&tab=settings" class="nav-tab <?php echo 'settings' === $current_tab ? 'nav-tab-active' : ''; ?>">
                 <?php esc_html_e( 'Settings', 'custom-schema-box-generator' ); ?>
             </a>
+            <a href="?page=csgbxgen-settings&tab=features" class="nav-tab <?php echo 'features' === $current_tab ? 'nav-tab-active' : ''; ?>">
+                <?php esc_html_e( 'Features', 'custom-schema-box-generator' ); ?>
+            </a>
             <a href="?page=csgbxgen-settings&tab=templates" class="nav-tab <?php echo 'templates' === $current_tab ? 'nav-tab-active' : ''; ?>">
                 <?php esc_html_e( 'Schema Templates', 'custom-schema-box-generator' ); ?>
             </a>
@@ -286,6 +302,9 @@ function csg_render_settings_page() {
         <?php
         // Display content based on current tab
         switch ( $current_tab ) {
+            case 'features':
+                csg_render_features_tab();
+                break;
             case 'templates':
                 csg_render_templates_tab();
                 break;
@@ -825,6 +844,66 @@ function csg_render_settings_tab( $pages, $posts, $custom_post_types, $all_pages
 
             <?php submit_button( __( 'Save Settings', 'custom-schema-box-generator' ) ); ?>
         </form>
+    <?php
+}
+
+/**
+ * Render the Features tab.
+ */
+function csg_render_features_tab() {
+    $features = array(
+        'Article'                  => 'Article',
+        'Book'                     => 'Book actions',
+        'Breadcrumb'               => 'Breadcrumb',
+        'Carousel'                 => 'Carousel',
+        'Course'                   => 'Course list',
+        'Dataset'                  => 'Dataset',
+        'DiscussionForumPosting'   => 'Discussion forum',
+        'Quiz'                     => 'Education Q&A',
+        'EmployerAggregateRating'  => 'Employer aggregate rating',
+        'FactCheck'                => 'Fact check',
+        'Event'                    => 'Event',
+        'FAQPage'                  => 'FAQ',
+        'ImageObject'              => 'Image metadata',
+        'JobPosting'               => 'Job posting',
+        'LocalBusiness'            => 'Local business',
+        'MathSolver'               => 'Math solver',
+        'Movie'                    => 'Movie carousel',
+        'Organization'             => 'Organization',
+        'Product'                  => 'Shopping (Product)',
+        'ProfilePage'              => 'Profile page',
+        'QAPage'                   => 'Q&A',
+        'Recipe'                   => 'Recipe',
+        'Review'                   => 'Review snippet',
+        'SoftwareApplication'      => 'Software app',
+        'SpeakableSpecification'   => 'Speakable',
+        'Subscription'             => 'Subscription and paywalled content',
+        'VacationRental'           => 'Vacation rental',
+        'VideoObject'              => 'Video',
+    );
+
+    $enabled_features = get_option( 'csg_enabled_sd_features', array() );
+    ?>
+    <div class="csg-features-container">
+        <h2>Structured Data Features</h2>
+        <p class="description">Select the structured data types you want to automatically generate for your content.</p>
+        
+        <form method="post" action="options.php">
+            <?php
+            settings_fields( 'csg_settings_group' );
+            ?>
+            <div class="csg-features-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 15px; margin-top: 20px;">
+                <?php foreach ( $features as $key => $label ) : ?>
+                    <?php $is_enabled = isset( $enabled_features[ $key ] ) && $enabled_features[ $key ] === '1'; ?>
+                    <label class="csg-feature-item" style="display: block; padding: 15px; background: #fff; border: 1px solid #ccd0d4; border-radius: 4px;">
+                        <input type="checkbox" name="csg_enabled_sd_features[<?php echo esc_attr( $key ); ?>]" value="1" <?php checked( $is_enabled ); ?>>
+                        <strong><?php echo esc_html( $label ); ?></strong>
+                    </label>
+                <?php endforeach; ?>
+            </div>
+            <?php submit_button( __( 'Save Features', 'custom-schema-box-generator' ) ); ?>
+        </form>
+    </div>
     <?php
 }
 
@@ -2326,6 +2405,19 @@ function csg_inject_schema_in_head() {
             if ( json_last_error() === JSON_ERROR_NONE ) {
                 // Re-encode to ensure it's properly escaped
                 echo '<script type="application/ld+json">' . wp_json_encode( $decoded ) . '</script>' . "\n";
+            }
+        }
+
+        // Output enabled structured data features
+        $enabled_features = get_option( 'csg_enabled_sd_features', array() );
+        if ( ! empty( $enabled_features ) ) {
+            foreach ( $enabled_features as $feature => $enabled ) {
+                if ( $enabled === '1' ) {
+                    $sd_data = StructuredDataGenerator::generate( $feature );
+                    if ( ! empty( $sd_data ) ) {
+                        echo '<script type="application/ld+json">' . wp_json_encode( $sd_data ) . '</script>' . "\n";
+                    }
+                }
             }
         }
     }
